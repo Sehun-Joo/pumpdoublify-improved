@@ -37,9 +37,13 @@ class PumpDoublifyTests(unittest.TestCase):
                 p.NEVER,
             )
 
-    def test_stacked_stances_are_allowed_but_crossovers_and_stretches_are_not(self):
-        self.assertTrue(p.is_safe_stance(0, 1))
-        self.assertTrue(p.is_safe_stance(1, 0))
+    def test_stacked_stances_and_crossovers_are_forbidden(self):
+        self.assertFalse(p.is_safe_stance(0, 1))
+        self.assertFalse(p.is_safe_stance(1, 0))
+        self.assertFalse(p.is_safe_stance(3, 4))
+        self.assertFalse(p.is_safe_stance(4, 3))
+        self.assertFalse(p.is_safe_stance(5, 6))
+        self.assertFalse(p.is_safe_stance(6, 5))
         self.assertTrue(p.is_safe_stance(2, 7))
         self.assertFalse(p.is_safe_stance(5, 4))
         self.assertFalse(p.is_safe_stance(0, 5))
@@ -51,9 +55,20 @@ class PumpDoublifyTests(unittest.TestCase):
         self.assertFalse(p.stance_keeps_both_feet_mobile(1, 0))
         self.assertFalse(p.stance_keeps_both_feet_mobile(8, 9))
         self.assertFalse(p.stance_keeps_both_feet_mobile(9, 8))
-        self.assertTrue(p.stance_keeps_both_feet_mobile(3, 4))
-        self.assertTrue(p.stance_keeps_both_feet_mobile(4, 3))
+        self.assertFalse(p.stance_keeps_both_feet_mobile(3, 4))
+        self.assertFalse(p.stance_keeps_both_feet_mobile(4, 3))
         self.assertTrue(p.stance_keeps_both_feet_mobile(2, 7))
+
+    def test_all_nonstacked_noncrossing_center_stretches_are_legal(self):
+        for left_panel in p.CENTER_PANELS:
+            for right_panel in p.CENTER_PANELS:
+                left_x = p.PANEL_COORDINATES[left_panel][0]
+                right_x = p.PANEL_COORDINATES[right_panel][0]
+                self.assertEqual(
+                    p.is_safe_stance(left_panel, right_panel),
+                    left_x < right_x,
+                    (left_panel, right_panel),
+                )
 
     def test_due_transitions_wait_for_the_next_measure(self):
         self.assertEqual(p.next_measure_index(0.0), 1)
@@ -169,11 +184,11 @@ class PumpDoublifyTests(unittest.TestCase):
     def test_middle_feet_can_cross_the_pad_boundary_but_not_the_center_six(self):
         # Left foot can enter P2; right foot can enter P1.
         self.assertNotEqual(
-            p.rate_step((4, 6, 5), True, 1, False, 0),
+            p.rate_step((4, 7, 5), True, 1, False, 0),
             p.NEVER,
         )
         self.assertNotEqual(
-            p.rate_step((5, 3, 4), False, 1, False, 0),
+            p.rate_step((5, 2, 4), False, 1, False, 0),
             p.NEVER,
         )
 

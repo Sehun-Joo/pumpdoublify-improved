@@ -11,8 +11,9 @@ Huge thanks to Boxx for writing the original 4 panel -> 8 panel converter, this 
   destination-facing preparation window only when a transition is pending.
 - Allows either foot to cross the pad boundary within the center six when the
   resulting route is short and the feet do not cross over each other.
-- Allows vertically stacked stances, while checking every foot movement for a
-  short route and forbidding left/right crossovers and over-wide stretches.
+- Forbids vertically stacked feet and left/right crossovers while allowing any
+  stance width inside the center six; every individual foot movement must
+  still use a short route.
 - Keeps both feet mobile after source slides and retries generation instead of
   silently emitting a panel when no safe continuation exists.
 - Keeps final panel selection inside the intended position or directional

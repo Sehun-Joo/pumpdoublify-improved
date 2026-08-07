@@ -102,14 +102,16 @@ def panel_distance(a, b):
     return abs(ax - bx) + abs(ay - by)
 
 def is_safe_stance(left_panel, right_panel):
-    """Allow stacked feet, but reject crossovers and excessive stretches."""
+    """Reject stacked/crossed feet; allow any width inside the center six."""
     if left_panel is None or right_panel is None:
         return True
     if left_panel == right_panel:
         return False
     left_x = PANEL_COORDINATES[left_panel][0]
     right_x = PANEL_COORDINATES[right_panel][0]
-    if left_x == right_x:
+    if left_x >= right_x:
+        return False
+    if left_panel in CENTER_PANELS and right_panel in CENTER_PANELS:
         return True
     return (left_panel, right_panel) in allowed_lr_pairs
 
@@ -117,6 +119,8 @@ def stance_keeps_both_feet_mobile(left_panel, right_panel):
     """Reject a stance that traps either foot on its current panel."""
     if left_panel is None or right_panel is None:
         return True
+    if not is_safe_stance(left_panel, right_panel):
+        return False
 
     for moving_left, current_panel, other_panel in (
         (True, left_panel, right_panel),
@@ -346,13 +350,6 @@ def rate_step(
     if dist < 1:
         score -= dist
     
-    #avoids stretches in half double positions
-    if len(notes) >= 2 and position in [1,2]:
-        a = notes[-1]
-        b = notes[-2]
-        if (a, b) in [(2,5),(2,6),(3,7),(4,7),(5,2),(6,2),(7,3),(7,4)]: #checks for center panel and further away corner
-            score -= 0.25
-
     # Avoid medium-fast transition in singles, in half doubles it's ok
     if len(notes) >= 7 and position in [0,3]:
         a = notes[-1]
