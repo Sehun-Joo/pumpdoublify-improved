@@ -37,10 +37,14 @@ class PumpDoublifyTests(unittest.TestCase):
                 p.NEVER,
             )
 
-    def test_stacked_stances_are_allowed_but_crossovers_are_not(self):
+    def test_stacked_stances_are_allowed_but_crossovers_and_stretches_are_not(self):
         self.assertTrue(p.is_safe_stance(0, 1))
         self.assertTrue(p.is_safe_stance(1, 0))
+        self.assertTrue(p.is_safe_stance(2, 7))
         self.assertFalse(p.is_safe_stance(5, 4))
+        self.assertFalse(p.is_safe_stance(0, 5))
+        self.assertFalse(p.is_safe_stance(1, 6))
+        self.assertFalse(p.is_safe_stance(4, 9))
 
     def test_due_transitions_wait_for_the_next_measure(self):
         self.assertEqual(p.next_measure_index(0.0), 1)
@@ -48,17 +52,38 @@ class PumpDoublifyTests(unittest.TestCase):
         self.assertEqual(p.next_measure_index(4.0), 2)
         self.assertEqual(p.next_measure_index(17.5), 5)
 
+    def test_transitions_do_not_split_source_anchors_or_measures(self):
+        self.assertTrue(
+            p.can_apply_position_transition(p.SLIDE, p.SLIDE, 8.0, False)
+        )
+        self.assertFalse(
+            p.can_apply_position_transition(p.STEP, p.SLIDE, 8.0, False)
+        )
+        self.assertFalse(
+            p.can_apply_position_transition(p.JACK, p.SLIDE, 8.0, False)
+        )
+        self.assertFalse(
+            p.can_apply_position_transition(p.SLIDE, p.STEP, 8.0, False)
+        )
+        self.assertFalse(
+            p.can_apply_position_transition(p.SLIDE, p.SLIDE, 8.25, False)
+        )
+        self.assertFalse(
+            p.can_apply_position_transition(p.SLIDE, p.SLIDE, 8.0, True)
+        )
+
     def test_jump_movement_safety_rejects_cross_center_diagonals(self):
         for previous_panel, next_panel in p.FORBIDDEN_CENTER_DIAGONALS:
             self.assertFalse(
                 p.is_safe_foot_movement(previous_panel, next_panel)
             )
 
-    def test_middle_jumps_respect_foot_ownership(self):
+    def test_middle_jumps_are_reachable_and_non_crossing(self):
         for position in p.CENTER_POSITIONS:
             for left_panel, right_panel in p.jumps_for_position[position]:
                 self.assertIn(left_panel, p.CENTER_LEFT_FOOT_PANELS)
                 self.assertIn(right_panel, p.CENTER_RIGHT_FOOT_PANELS)
+                self.assertTrue(p.is_safe_stance(left_panel, right_panel))
 
     def test_all_six_center_panels_are_available_outside_transition_prep(self):
         for position_index in (1, 2, 4, 5):
@@ -81,11 +106,11 @@ class PumpDoublifyTests(unittest.TestCase):
                 p.get_jumps_for_position(position_index, False),
             )
         self.assertNotEqual(
-            p.rate_step((7, 2, 7), False, 1, False, 0),
+            p.rate_step((7, 2, 7), False, 1, True, 0),
             p.NEVER,
         )
         self.assertNotEqual(
-            p.rate_step((2, 7, 2), True, 1, False, 0),
+            p.rate_step((2, 7, 2), True, 1, True, 0),
             p.NEVER,
         )
 
@@ -105,7 +130,7 @@ class PumpDoublifyTests(unittest.TestCase):
         toward_p2 = ((2, 5, 2), True, 2)
         for notes, is_left_foot, position_index in (toward_p1, toward_p2):
             self.assertNotEqual(
-                p.rate_step(notes, is_left_foot, position_index, False, 0),
+                p.rate_step(notes, is_left_foot, position_index, True, 0),
                 p.NEVER,
             )
             self.assertEqual(
@@ -113,24 +138,66 @@ class PumpDoublifyTests(unittest.TestCase):
                     notes,
                     is_left_foot,
                     position_index,
-                    False,
+                    True,
                     0,
                     True,
                 ),
                 p.NEVER,
             )
 
-    def test_middle_single_steps_reject_the_other_foots_panels(self):
-        for panel in p.CENTER_RIGHT_FOOT_PANELS:
-            self.assertEqual(
-                p.rate_step((panel,), True, 1, False, 0),
-                p.NEVER,
-            )
-        for panel in p.CENTER_LEFT_FOOT_PANELS:
-            self.assertEqual(
-                p.rate_step((panel,), False, 1, False, 0),
-                p.NEVER,
-            )
+    def test_middle_feet_can_cross_the_pad_boundary_but_not_the_center_six(self):
+        # Left foot can enter P2; right foot can enter P1.
+        self.assertNotEqual(
+            p.rate_step((4, 6, 5), True, 1, False, 0),
+            p.NEVER,
+        )
+        self.assertNotEqual(
+            p.rate_step((5, 3, 4), False, 1, False, 0),
+            p.NEVER,
+        )
+
+        # Neither foot may swing all the way to the far edge of the center six.
+        self.assertEqual(p.rate_step((7,), True, 1, False, 0), p.NEVER)
+        self.assertEqual(p.rate_step((2,), False, 1, False, 0), p.NEVER)
+
+    def test_source_slide_moves_the_same_foot(self):
+        self.assertLess(
+            p.rate_step((3, 5, 3), True, 1, False, 0),
+            p.rate_step((3, 5, 4), True, 1, False, 0),
+        )
+
+        rows = [b'1000', b'0100', b'0010'] * 12
+        output = p.doublify_notes_data(b'\n'.join(rows), [(0.0, 140.0)])
+        output_rows = [row.strip() for row in output.splitlines() if row.strip()]
+        panels = [
+            next(panel for panel, kind in enumerate(row) if kind == ord('1'))
+            for row in output_rows
+        ]
+        for index in range(2, len(panels)):
+            self.assertNotEqual(panels[index], panels[index - 2])
+
+    def test_source_drill_returns_are_preserved_without_a_length_cap(self):
+        rows = [b'1000', b'0100'] * 16
+        output = p.doublify_notes_data(b'\n'.join(rows), [(0.0, 140.0)])
+        output_rows = [row.strip() for row in output.splitlines() if row.strip()]
+        panels = [
+            next(panel for panel, kind in enumerate(row) if kind == ord('1'))
+            for row in output_rows
+        ]
+
+        for index in range(2, len(panels)):
+            self.assertEqual(panels[index], panels[index - 2])
+
+    def test_source_jack_is_preserved_without_a_length_cap(self):
+        rows = [b'1000'] * 32
+        output = p.doublify_notes_data(b'\n'.join(rows), [(0.0, 140.0)])
+        output_rows = [row.strip() for row in output.splitlines() if row.strip()]
+        panels = [
+            next(panel for panel, kind in enumerate(row) if kind == ord('1'))
+            for row in output_rows
+        ]
+
+        self.assertEqual(len(set(panels)), 1)
 
     def test_holds_and_rolls_resolve_on_their_start_panels(self):
         notes = b'''2000

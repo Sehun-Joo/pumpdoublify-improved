@@ -9,17 +9,21 @@ Huge thanks to Boxx for writing the original 4 panel -> 8 panel converter, this 
 - Generates patterns suitable for stamina & footspeed.
 - Uses all six center panels during normal play, then activates a short
   destination-facing preparation window only when a transition is pending.
-- Allows either foot to use all three panels on its side when the other foot
-  is on a center panel, including the two-center stance (`2` + `7`).
+- Allows either foot to cross the pad boundary within the center six when the
+  resulting route is short and the feet do not cross over each other.
 - Allows vertically stacked stances, while checking every foot movement for a
-  short route and forbidding left/right crossovers.
+  short route and forbidding left/right crossovers and over-wide stretches.
+- Preserves source jacks, drills, trills, and one-foot anchors for their full
+  original duration, while requiring source slides to actually move the foot
+  so varied source patterns do not collapse into artificial column anchors.
 - Forbids diagonal movements across the gap between the two pads.
 - Limits overlapping holds and new steps to two active feet, ending older
   holds cleanly before a new pair begins.
 - Keeps notes played during a hold on the free foot instead of alternating
   back onto the held foot.
-- Delays already-due pad transitions to the next measure boundary when an
-  eligible step is available; this does not add extra transitions.
+- Delays already-due pad transitions to a measure boundary with two source
+  slides, giving both feet a chance to relocate before a jack, drill, trill,
+  or anchor can lock in; this does not add extra transitions.
 
 ## Issues
 - Quads & triples will be converted to jumps.

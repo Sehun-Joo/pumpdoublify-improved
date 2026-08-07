@@ -102,14 +102,16 @@ def panel_distance(a, b):
     return abs(ax - bx) + abs(ay - by)
 
 def is_safe_stance(left_panel, right_panel):
-    """Allow vertically stacked feet, but never let them cross."""
+    """Allow stacked feet, but reject crossovers and excessive stretches."""
     if left_panel is None or right_panel is None:
         return True
     if left_panel == right_panel:
         return False
     left_x = PANEL_COORDINATES[left_panel][0]
     right_x = PANEL_COORDINATES[right_panel][0]
-    return left_x <= right_x
+    if left_x == right_x:
+        return True
+    return (left_panel, right_panel) in allowed_lr_pairs
 
 def get_step_feet(step_pattern, final_left_foot):
     """Reconstruct the foot attached to every generated output step."""
@@ -133,6 +135,14 @@ def get_step_feet(step_pattern, final_left_foot):
             feet.append(last_left_foot)
     return feet
 
+def get_output_step_kinds(step_pattern):
+    """Expand row-level kinds to match the generated panel sequence."""
+    kinds = []
+    for note_kind, _, _ in step_pattern:
+        count = 2 if note_kind in (JUMP, JUMP_JACK) else 1
+        kinds.extend([note_kind] * count)
+    return kinds
+
 #positions: left half, middle 6 x2, right half
 #originally tested two different middle positions, but ended up leaving them identical
 left_foot_distances = [
@@ -151,12 +161,14 @@ right_foot_distances = [
 
 positions = [0,1,2,3,2,1]
 
-# In either of the two middle positions, keep each foot on its own half of the
-# center six panels.  These are hard constraints; the distance tables below
-# are still used to score the remaining legal choices.
+# In the middle positions, either foot may cross the boundary between pads as
+# long as its own movement stays short and the resulting stance does not cross
+# the feet. The outermost center-six panel remains out of reach for the foot
+# coming from the opposite side.
 CENTER_POSITIONS = {1, 2}
-CENTER_LEFT_FOOT_PANELS = {2, 3, 4}
-CENTER_RIGHT_FOOT_PANELS = {5, 6, 7}
+CENTER_PANELS = {2, 3, 4, 5, 6, 7}
+CENTER_LEFT_FOOT_PANELS = {2, 3, 4, 5, 6}
+CENTER_RIGHT_FOOT_PANELS = {3, 4, 5, 6, 7}
 
 # Use all six panels during ordinary center play. Only narrow the available
 # panels after an outward transition is already pending, so the feet settle
@@ -168,20 +180,27 @@ CENTER_PANELS_BY_FOOT = {
 TRANSITION_PREP_PANELS_BY_POSITION_AND_FOOT = {
     # position_index 2 moves from center toward P2 next.
     2: {
-        True: {3, 4},
-        False: CENTER_RIGHT_FOOT_PANELS,
+        True: {3, 4, 5, 6, 7},
+        False: {3, 4, 5, 6, 7},
     },
     # position_index 5 moves from center toward P1 next.
     5: {
-        True: CENTER_LEFT_FOOT_PANELS,
-        False: {5, 6},
+        True: {2, 3, 4, 5, 6},
+        False: {2, 3, 4, 5, 6},
     },
 }
 
+CENTER_JUMPS = [
+    (left_panel, right_panel)
+    for left_panel in CENTER_LEFT_FOOT_PANELS
+    for right_panel in CENTER_RIGHT_FOOT_PANELS
+    if is_safe_stance(left_panel, right_panel)
+]
+
 jumps_for_position = [
     [(0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (1, 4), (2, 3), (2, 4)],
-    [(2, 5), (2, 6), (2, 7), (3, 5), (3, 6), (3, 7), (4, 5), (4, 6), (4, 7)],
-    [(2, 5), (2, 6), (2, 7), (3, 5), (3, 6), (3, 7), (4, 5), (4, 6), (4, 7)],
+    CENTER_JUMPS,
+    CENTER_JUMPS,
     [(5, 7), (5, 8), (5, 9), (6, 7), (6, 8), (6, 9), (7, 8), (7, 9)],
 ]
 
@@ -252,9 +271,11 @@ def rate_step(
             return NEVER
 
     # Check shmoove
+    repeats_on_source_slide = False
     if len(notes) >= 3:
         a = notes[-1]
         b = notes[-3]
+        repeats_on_source_slide = not is_single_step and a == b
         if (a, b) in FORBIDDEN_CENTER_DIAGONALS:
             return NEVER
         if not (a, b) in allowed_foot_movements:
@@ -268,6 +289,11 @@ def rate_step(
             return NEVER
 
     score = 0
+
+    # Preserve a low-scoring fallback so dense passages cannot exhaust the
+    # beam search. Final panel selection below strictly moves source SLIDEs.
+    if repeats_on_source_slide:
+        score -= 2
     
     #using distance to weight for/against certain arrows in certain positions
     #for singles positions the center panel slightly prefers the outer foot
@@ -451,6 +477,21 @@ def next_measure_index(beat):
     """Return the measure on which a newly due transition may begin."""
     return int(beat // 4) + 1
 
+def can_apply_position_transition(
+    note_kind,
+    next_note_kind,
+    note_beat,
+    was_jump,
+):
+    """Move pads only when both feet can enter a new phrase together."""
+    is_measure_boundary = abs(note_beat % 4) < 1e-9
+    return (
+        note_kind == SLIDE
+        and next_note_kind == SLIDE
+        and is_measure_boundary
+        and not was_jump
+    )
+
 BEAM_SIZE = 50
 MIN_HOLD_BEATS = 0.25
 HOLD_TRANSITION_BUFFER_BEATS = 0.25
@@ -489,8 +530,18 @@ def doublify_measures(measures, bpm_changes):
 
     for note_index in range(len(step_pattern)):
         note_kind, og_note, note_beat = step_pattern[note_index]
+        next_note_kind = (
+            step_pattern[note_index + 1][0]
+            if note_index + 1 < len(step_pattern)
+            else None
+        )
         bpm = bpms[note_index]
-        if note_kind in [STEP, SLIDE] and not was_jump:
+        if can_apply_position_transition(
+            note_kind,
+            next_note_kind,
+            note_beat,
+            was_jump,
+        ):
             current_measure = int(note_beat // 4)
             if (
                 pending_transition_measure is not None
@@ -676,7 +727,9 @@ def doublify_measures(measures, bpm_changes):
         full_steps = full_steps[1]
     double_steps = double_steps[::-1]
     double_feet = get_step_feet(step_pattern, best_key[1])
+    double_step_kinds = get_output_step_kinds(step_pattern)
     assert len(double_feet) == len(double_steps)
+    assert len(double_step_kinds) == len(double_steps)
     
     double_step_index = 0
     invert_generated_feet = False
@@ -737,12 +790,14 @@ def doublify_measures(measures, bpm_changes):
         del source_hold_start_beats[source_lane]
         cancelled_source_holds.add(source_lane)
 
-    def choose_safe_panel(generated_panel, foot):
-        """Keep each foot's movement short and prevent crossovers."""
+    def choose_safe_panel(generated_panel, foot, step_kind):
+        """Preserve source intent while keeping every foot route playable."""
         previous_panel = last_panel_by_foot.get(foot)
         other_panel = last_panel_by_foot.get(not foot)
 
         def panel_is_safe(panel):
+            if panel is None:
+                return False
             if chars[panel] != b'0' or panel in source_holds.values():
                 return False
             if (
@@ -750,8 +805,16 @@ def doublify_measures(measures, bpm_changes):
                 and not is_safe_foot_movement(previous_panel, panel)
             ):
                 return False
+            if step_kind == SLIDE and panel == previous_panel:
+                return False
             stance = (panel, other_panel) if foot else (other_panel, panel)
             return is_safe_stance(*stance)
+
+        # STEP is a source return (the same source lane as two events ago).
+        # Keep that foot anchored for as long as the source pattern does,
+        # independent of the converter's position-transition timing.
+        if step_kind == STEP and panel_is_safe(previous_panel):
+            return previous_panel
 
         if panel_is_safe(generated_panel):
             return generated_panel
@@ -763,6 +826,8 @@ def doublify_measures(measures, bpm_changes):
             score = panel_distance(panel, generated_panel)
             if previous_panel is not None:
                 score += panel_distance(previous_panel, panel)
+                if step_kind == STEP and panel == previous_panel:
+                    score -= 2
             candidates.append((score, panel))
 
         if not candidates:
@@ -852,6 +917,7 @@ def doublify_measures(measures, bpm_changes):
                 generated_foot = (
                     double_feet[double_step_index] != invert_generated_feet
                 )
+                generated_step_kind = double_step_kinds[double_step_index]
                 double_step_index += 1
                 if reused_output_panels:
                     output_panel, foot = reused_output_panels.pop(0)
@@ -862,7 +928,11 @@ def doublify_measures(measures, bpm_changes):
                     held_feet = set(source_hold_feet.values())
                     if foot in held_feet and len(held_feet) == 1:
                         foot = not foot
-                    safe_panel = choose_safe_panel(generated_output_panel, foot)
+                    safe_panel = choose_safe_panel(
+                        generated_output_panel,
+                        foot,
+                        generated_step_kind,
+                    )
                     if safe_panel is not None:
                         output_panel = safe_panel
 
