@@ -11,6 +11,8 @@ Huge thanks to Boxx for writing the original 4 panel -> 8 panel converter, this 
   destination-facing preparation window only when a transition is pending.
 - Allows either foot to use all three panels on its side when the other foot
   is on a center panel, including the two-center stance (`2` + `7`).
+- Allows vertically stacked stances, while checking every foot movement for a
+  short route and forbidding left/right crossovers.
 - Forbids diagonal movements across the gap between the two pads.
 - Limits overlapping holds and new steps to two active feet, ending older
   holds cleanly before a new pair begins.

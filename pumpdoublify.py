@@ -101,6 +101,16 @@ def panel_distance(a, b):
     bx, by = PANEL_COORDINATES[b]
     return abs(ax - bx) + abs(ay - by)
 
+def is_safe_stance(left_panel, right_panel):
+    """Allow vertically stacked feet, but never let them cross."""
+    if left_panel is None or right_panel is None:
+        return True
+    if left_panel == right_panel:
+        return False
+    left_x = PANEL_COORDINATES[left_panel][0]
+    right_x = PANEL_COORDINATES[right_panel][0]
+    return left_x <= right_x
+
 def get_step_feet(step_pattern, final_left_foot):
     """Reconstruct the foot attached to every generated output step."""
     toggle_count = 0
@@ -238,7 +248,7 @@ def rate_step(
         a, b = notes[-2:]
         if is_left_foot:
             a, b = b, a
-        if not (a, b) in allowed_lr_pairs:
+        if not is_safe_stance(a, b):
             return NEVER
 
     # Check shmoove
@@ -669,6 +679,7 @@ def doublify_measures(measures, bpm_changes):
     assert len(double_feet) == len(double_steps)
     
     double_step_index = 0
+    invert_generated_feet = False
     # Holds must retain their input-lane identity.  The old implementation
     # stored only a set of output panels, so a release could end a different
     # hold from the one that began on that input lane.
@@ -726,26 +737,29 @@ def doublify_measures(measures, bpm_changes):
         del source_hold_start_beats[source_lane]
         cancelled_source_holds.add(source_lane)
 
-    def choose_panel_for_free_foot(generated_panel, foot):
-        """Keep a note on the unheld foot and in a playable stance."""
+    def choose_safe_panel(generated_panel, foot):
+        """Keep each foot's movement short and prevent crossovers."""
         previous_panel = last_panel_by_foot.get(foot)
-        held = [
-            (source_holds[lane], source_hold_feet[lane])
-            for lane in source_holds
-        ]
+        other_panel = last_panel_by_foot.get(not foot)
+
+        def panel_is_safe(panel):
+            if chars[panel] != b'0' or panel in source_holds.values():
+                return False
+            if (
+                previous_panel is not None
+                and not is_safe_foot_movement(previous_panel, panel)
+            ):
+                return False
+            stance = (panel, other_panel) if foot else (other_panel, panel)
+            return is_safe_stance(*stance)
+
+        if panel_is_safe(generated_panel):
+            return generated_panel
+
         candidates = []
         for panel in range(10):
-            if chars[panel] != b'0' or panel in source_holds.values():
+            if not panel_is_safe(panel):
                 continue
-            if previous_panel is not None and not is_safe_foot_movement(previous_panel, panel):
-                continue
-            if held:
-                held_panel, held_foot = held[0]
-                if held_foot == foot:
-                    continue
-                stance = (panel, held_panel) if foot else (held_panel, panel)
-                if stance not in allowed_lr_pairs:
-                    continue
             score = panel_distance(panel, generated_panel)
             if previous_panel is not None:
                 score += panel_distance(previous_panel, panel)
@@ -835,7 +849,9 @@ def doublify_measures(measures, bpm_changes):
 
             for source_lane, kind in starts:
                 generated_output_panel = double_steps[double_step_index]
-                generated_foot = double_feet[double_step_index]
+                generated_foot = (
+                    double_feet[double_step_index] != invert_generated_feet
+                )
                 double_step_index += 1
                 if reused_output_panels:
                     output_panel, foot = reused_output_panels.pop(0)
@@ -846,13 +862,16 @@ def doublify_measures(measures, bpm_changes):
                     held_feet = set(source_hold_feet.values())
                     if foot in held_feet and len(held_feet) == 1:
                         foot = not foot
-                    if source_holds:
-                        free_foot_panel = choose_panel_for_free_foot(
-                            generated_output_panel,
-                            foot,
-                        )
-                        if free_foot_panel is not None:
-                            output_panel = free_foot_panel
+                    safe_panel = choose_safe_panel(generated_output_panel, foot)
+                    if safe_panel is not None:
+                        output_panel = safe_panel
+
+                # If hold ownership forced this note onto the opposite foot,
+                # carry that parity change into subsequent generated steps.
+                # Otherwise the first note after the hold can repeat the free
+                # foot and create an illegal double step near the hold tail.
+                if foot != generated_foot:
+                    invert_generated_feet = not invert_generated_feet
 
                 if output_panel in source_holds.values():
                     cancel_output_hold(output_panel)

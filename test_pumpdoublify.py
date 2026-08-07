@@ -37,6 +37,11 @@ class PumpDoublifyTests(unittest.TestCase):
                 p.NEVER,
             )
 
+    def test_stacked_stances_are_allowed_but_crossovers_are_not(self):
+        self.assertTrue(p.is_safe_stance(0, 1))
+        self.assertTrue(p.is_safe_stance(1, 0))
+        self.assertFalse(p.is_safe_stance(5, 4))
+
     def test_due_transitions_wait_for_the_next_measure(self):
         self.assertEqual(p.next_measure_index(0.0), 1)
         self.assertEqual(p.next_measure_index(3.999), 1)
@@ -69,6 +74,7 @@ class PumpDoublifyTests(unittest.TestCase):
 
     def test_center_foot_allows_the_other_foot_anywhere_on_its_side(self):
         self.assertIn((2, 7), p.allowed_lr_pairs)
+        self.assertTrue(p.is_safe_stance(2, 7))
         for position_index in (1, 2, 4, 5):
             self.assertIn(
                 (2, 7),
@@ -163,9 +169,40 @@ class PumpDoublifyTests(unittest.TestCase):
             self.assertTrue(p.is_safe_foot_movement(previous, current))
         for tap_panel in tap_panels:
             self.assertTrue(
-                (hold_panel, tap_panel) in p.allowed_lr_pairs
-                or (tap_panel, hold_panel) in p.allowed_lr_pairs
+                p.is_safe_stance(hold_panel, tap_panel)
+                or p.is_safe_stance(tap_panel, hold_panel)
             )
+
+    def test_foot_alternation_resumes_cleanly_after_a_hold(self):
+        rows = [b'0000'] * 32
+        rows[0] = b'2000'
+        rows[8] = b'0100'
+        rows[12] = b'0010'
+        rows[16] = b'0001'
+        rows[20] = b'3100'
+        rows[24] = b'0010'
+        output = p.doublify_notes_data(b'\n'.join(rows), [(0.0, 140.0)])
+        output_rows = [row.strip() for row in output.splitlines() if row.strip()]
+
+        hold_panel = next(
+            panel for panel, kind in enumerate(output_rows[0]) if kind == ord('2')
+        )
+        last_free_panel = next(
+            panel for panel, kind in enumerate(output_rows[16]) if kind == ord('1')
+        )
+        released_foot_panel = next(
+            panel for panel, kind in enumerate(output_rows[20]) if kind == ord('1')
+        )
+        resumed_free_panel = next(
+            panel for panel, kind in enumerate(output_rows[24]) if kind == ord('1')
+        )
+
+        self.assertTrue(
+            p.is_safe_foot_movement(hold_panel, released_foot_panel)
+        )
+        self.assertTrue(
+            p.is_safe_foot_movement(last_free_panel, resumed_free_panel)
+        )
 
     def test_overlapping_hold_pairs_are_limited_to_two_feet(self):
         # The final section of We Luv Lama uses this staggered structure: a new
