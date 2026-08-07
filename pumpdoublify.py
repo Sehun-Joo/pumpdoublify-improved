@@ -148,27 +148,45 @@ CENTER_POSITIONS = {1, 2}
 CENTER_LEFT_FOOT_PANELS = {2, 3, 4}
 CENTER_RIGHT_FOOT_PANELS = {5, 6, 7}
 
-# The middle position next to P1 (position 1) keeps the right foot off P2
-# center.  The middle position next to P2 (position 2) mirrors that rule for
-# the left foot.  This turns the two middle positions into transition zones
-# instead of allowing a center-panel-to-opposite-pad leap at the boundary.
-CENTER_PANELS_BY_POSITION_AND_FOOT = {
-    1: {
-        True: {2, 3, 4},
-        False: {5, 6},
-    },
+# Use all six panels during ordinary center play. Only narrow the available
+# panels after an outward transition is already pending, so the feet settle
+# near the destination without making the whole center phase repetitive.
+CENTER_PANELS_BY_FOOT = {
+    True: CENTER_LEFT_FOOT_PANELS,
+    False: CENTER_RIGHT_FOOT_PANELS,
+}
+TRANSITION_PREP_PANELS_BY_POSITION_AND_FOOT = {
+    # position_index 2 moves from center toward P2 next.
     2: {
         True: {3, 4},
-        False: {5, 6, 7},
+        False: CENTER_RIGHT_FOOT_PANELS,
+    },
+    # position_index 5 moves from center toward P1 next.
+    5: {
+        True: CENTER_LEFT_FOOT_PANELS,
+        False: {5, 6},
     },
 }
 
 jumps_for_position = [
     [(0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (1, 4), (2, 3), (2, 4)],
-    [(2, 5), (2, 6), (3, 5), (3, 6), (4, 5), (4, 6)],
-    [(3, 5), (3, 6), (3, 7), (4, 5), (4, 6), (4, 7)],
+    [(2, 5), (2, 6), (3, 5), (3, 6), (3, 7), (4, 5), (4, 6), (4, 7)],
+    [(2, 5), (2, 6), (3, 5), (3, 6), (3, 7), (4, 5), (4, 6), (4, 7)],
     [(5, 7), (5, 8), (5, 9), (6, 7), (6, 8), (6, 9), (7, 8), (7, 9)],
 ]
+
+def get_jumps_for_position(position_index, is_transition_pending=False):
+    candidates = jumps_for_position[positions[position_index]]
+    if (
+        is_transition_pending
+        and position_index in TRANSITION_PREP_PANELS_BY_POSITION_AND_FOOT
+    ):
+        prep = TRANSITION_PREP_PANELS_BY_POSITION_AND_FOOT[position_index]
+        candidates = [
+            pair for pair in candidates
+            if pair[0] in prep[True] and pair[1] in prep[False]
+        ]
+    return candidates
 
 NEVER = float('-inf')
 STATE_STEP_COUNT = 7
@@ -176,11 +194,24 @@ STATE_STEP_COUNT = 7
 FORWARDNESS = [0, 2, 1, 2, 0, 0, 2, 1, 2, 0] #How far up each panel is
 
 #this is the step generation logic, a lot of this is kinda arbitrary but I've arrived here after a lot of experimenting
-def rate_step(notes, is_left_foot, position_index, is_single_step, og_note):
+def rate_step(
+    notes,
+    is_left_foot,
+    position_index,
+    is_single_step,
+    og_note,
+    is_transition_pending=False,
+):
     # Check position
     position = positions[position_index]
     if position in CENTER_POSITIONS:
-        allowed_panels = CENTER_PANELS_BY_POSITION_AND_FOOT[position][is_left_foot]
+        allowed_panels = CENTER_PANELS_BY_FOOT[is_left_foot]
+        if (
+            is_transition_pending
+            and position_index in TRANSITION_PREP_PANELS_BY_POSITION_AND_FOOT
+        ):
+            prep = TRANSITION_PREP_PANELS_BY_POSITION_AND_FOOT[position_index]
+            allowed_panels = prep[is_left_foot]
         if notes[-1] not in allowed_panels:
             return NEVER
 
@@ -492,7 +523,10 @@ def doublify_measures(measures, bpm_changes):
                     old_left_panel, old_right_panel = old0, old1
 
                 candidates = [
-                    j for j in jumps_for_position[positions[position_index]]
+                    j for j in get_jumps_for_position(
+                        position_index,
+                        pending_transition_measure is not None,
+                    )
                     if min(*j) != min(old0, old1) or max(*j) != max(old0, old1)
                     if is_safe_foot_movement(old_left_panel, j[0])
                     and is_safe_foot_movement(old_right_panel, j[1])
@@ -524,13 +558,19 @@ def doublify_measures(measures, bpm_changes):
                     
                     if old_left_foot:
                         candidates = [
-                            b for a, b in jumps_for_position[positions[position_index]]
+                            b for a, b in get_jumps_for_position(
+                                position_index,
+                                pending_transition_measure is not None,
+                            )
                             if a == note1
                             and is_safe_foot_movement(previous_other_panel, b)
                         ]
                     else:
                         candidates = [
-                            a for a, b in jumps_for_position[positions[position_index]]
+                            a for a, b in get_jumps_for_position(
+                                position_index,
+                                pending_transition_measure is not None,
+                            )
                             if b == note1
                             and is_safe_foot_movement(previous_other_panel, a)
                         ]
@@ -574,6 +614,7 @@ def doublify_measures(measures, bpm_changes):
                         position_index,
                         note_kind == STEP,
                         og_note,
+                        pending_transition_measure is not None,
                     )
                     if new_score != NEVER:
                         new_state_pairs.append((

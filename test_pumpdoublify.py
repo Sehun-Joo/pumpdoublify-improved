@@ -55,19 +55,48 @@ class PumpDoublifyTests(unittest.TestCase):
                 self.assertIn(left_panel, p.CENTER_LEFT_FOOT_PANELS)
                 self.assertIn(right_panel, p.CENTER_RIGHT_FOOT_PANELS)
 
+    def test_all_six_center_panels_are_available_outside_transition_prep(self):
+        for position_index in (1, 2, 4, 5):
+            jumps = p.get_jumps_for_position(position_index, False)
+            self.assertEqual(
+                {left_panel for left_panel, _ in jumps},
+                p.CENTER_LEFT_FOOT_PANELS,
+            )
+            self.assertEqual(
+                {right_panel for _, right_panel in jumps},
+                p.CENTER_RIGHT_FOOT_PANELS,
+            )
+
     def test_middle_jumps_avoid_center_panel_leaps_at_transitions(self):
-        # Position 1 borders P1, so the right foot must already have left P2
-        # center. Position 2 borders P2 and mirrors that restriction.
+        # position_index 5 exits toward P1; position_index 2 exits toward P2.
+        toward_p1 = p.get_jumps_for_position(5, True)
+        toward_p2 = p.get_jumps_for_position(2, True)
         self.assertTrue(
-            all(right_panel != 7 for _, right_panel in p.jumps_for_position[1])
+            all(right_panel != 7 for _, right_panel in toward_p1)
         )
         self.assertTrue(
-            all(left_panel != 2 for left_panel, _ in p.jumps_for_position[2])
+            all(left_panel != 2 for left_panel, _ in toward_p2)
         )
 
     def test_single_steps_avoid_center_panel_leaps_at_transitions(self):
-        self.assertEqual(p.rate_step((7,), False, 1, False, 0), p.NEVER)
-        self.assertEqual(p.rate_step((2,), True, 2, False, 0), p.NEVER)
+        toward_p1 = ((7, 4, 7), False, 5)
+        toward_p2 = ((2, 5, 2), True, 2)
+        for notes, is_left_foot, position_index in (toward_p1, toward_p2):
+            self.assertNotEqual(
+                p.rate_step(notes, is_left_foot, position_index, False, 0),
+                p.NEVER,
+            )
+            self.assertEqual(
+                p.rate_step(
+                    notes,
+                    is_left_foot,
+                    position_index,
+                    False,
+                    0,
+                    True,
+                ),
+                p.NEVER,
+            )
 
     def test_middle_single_steps_reject_the_other_foots_panels(self):
         for panel in p.CENTER_RIGHT_FOOT_PANELS:

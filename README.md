@@ -7,8 +7,8 @@ Huge thanks to Boxx for writing the original 4 panel -> 8 panel converter, this 
 - Removes old autogen charts so you can re-doublify charts when a new version comes out.
 - Skips charts which have non-autogen double charts so you can doublify your whole Songs folder and you won't lose anything.
 - Generates patterns suitable for stamina & footspeed.
-- Uses staged middle positions so transitions never require a foot to leap
-  from one pad's center panel directly toward the opposite pad.
+- Uses all six center panels during normal play, then activates a short
+  destination-facing preparation window only when a transition is pending.
 - Forbids diagonal movements across the gap between the two pads.
 - Limits overlapping holds and new steps to two active feet, ending older
   holds cleanly before a new pair begins.
@@ -30,7 +30,7 @@ Huge thanks to Boxx for writing the original 4 panel -> 8 panel converter, this 
 - Currently only Windows is supported.
 - Download the repository (if you aren't familiar with Github, press the green Code button then "Download ZIP")
 - Install python 3.8 or higher (tested with 3.10): https://www.python.org/downloads/
-- Depending on the installation, "python" in pumpdoublify.bat might need to be replaced with "py"
+- The launcher prefers the Windows `py -3` command and falls back to `python`.
 - In File Explorer, drag a folder or simfile onto pumpdoublify.bat
 - Wait for the message "Press any key to continue . . ." to appear. This may take a while if there are lots of songs.
 - Press any key
