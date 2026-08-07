@@ -67,6 +67,22 @@ class PumpDoublifyTests(unittest.TestCase):
                 p.CENTER_RIGHT_FOOT_PANELS,
             )
 
+    def test_center_foot_allows_the_other_foot_anywhere_on_its_side(self):
+        self.assertIn((2, 7), p.allowed_lr_pairs)
+        for position_index in (1, 2, 4, 5):
+            self.assertIn(
+                (2, 7),
+                p.get_jumps_for_position(position_index, False),
+            )
+        self.assertNotEqual(
+            p.rate_step((7, 2, 7), False, 1, False, 0),
+            p.NEVER,
+        )
+        self.assertNotEqual(
+            p.rate_step((2, 7, 2), True, 1, False, 0),
+            p.NEVER,
+        )
+
     def test_middle_jumps_avoid_center_panel_leaps_at_transitions(self):
         # position_index 5 exits toward P1; position_index 2 exits toward P2.
         toward_p1 = p.get_jumps_for_position(5, True)
