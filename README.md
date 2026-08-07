@@ -13,6 +13,10 @@ Huge thanks to Boxx for writing the original 4 panel -> 8 panel converter, this 
   resulting route is short and the feet do not cross over each other.
 - Allows vertically stacked stances, while checking every foot movement for a
   short route and forbidding left/right crossovers and over-wide stretches.
+- Keeps both feet mobile after source slides and retries generation instead of
+  silently emitting a panel when no safe continuation exists.
+- Keeps final panel selection inside the intended position or directional
+  transition-preparation region instead of wandering away from its target.
 - Preserves source jacks, drills, trills, and one-foot anchors for their full
   original duration, while requiring source slides to actually move the foot
   so varied source patterns do not collapse into artificial column anchors.
@@ -23,7 +27,8 @@ Huge thanks to Boxx for writing the original 4 panel -> 8 panel converter, this 
   back onto the held foot.
 - Delays already-due pad transitions to a measure boundary with two source
   slides, giving both feet a chance to relocate before a jack, drill, trill,
-  or anchor can lock in; this does not add extra transitions.
+  or anchor can lock in. Positions last at least four measures, and this does
+  not add extra transitions.
 
 ## Issues
 - Quads & triples will be converted to jumps.

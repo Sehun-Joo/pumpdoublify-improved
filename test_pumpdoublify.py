@@ -46,11 +46,24 @@ class PumpDoublifyTests(unittest.TestCase):
         self.assertFalse(p.is_safe_stance(1, 6))
         self.assertFalse(p.is_safe_stance(4, 9))
 
+    def test_slide_stances_do_not_trap_either_foot(self):
+        self.assertFalse(p.stance_keeps_both_feet_mobile(0, 1))
+        self.assertFalse(p.stance_keeps_both_feet_mobile(1, 0))
+        self.assertFalse(p.stance_keeps_both_feet_mobile(8, 9))
+        self.assertFalse(p.stance_keeps_both_feet_mobile(9, 8))
+        self.assertTrue(p.stance_keeps_both_feet_mobile(3, 4))
+        self.assertTrue(p.stance_keeps_both_feet_mobile(4, 3))
+        self.assertTrue(p.stance_keeps_both_feet_mobile(2, 7))
+
     def test_due_transitions_wait_for_the_next_measure(self):
         self.assertEqual(p.next_measure_index(0.0), 1)
         self.assertEqual(p.next_measure_index(3.999), 1)
         self.assertEqual(p.next_measure_index(4.0), 2)
         self.assertEqual(p.next_measure_index(17.5), 5)
+        self.assertFalse(p.position_transition_is_due(2, 3, 0))
+        self.assertTrue(p.position_transition_is_due(2, 4, 0))
+        self.assertFalse(p.position_transition_is_due(7, 6, 0))
+        self.assertFalse(p.position_transition_is_due(None, 8, 0))
 
     def test_transitions_do_not_split_source_anchors_or_measures(self):
         self.assertTrue(
@@ -124,6 +137,14 @@ class PumpDoublifyTests(unittest.TestCase):
         self.assertTrue(
             all(left_panel != 2 for left_panel, _ in toward_p2)
         )
+
+    def test_transition_prep_is_directional_without_limiting_normal_center(self):
+        self.assertIn(6, p.get_allowed_panels_for_position(5, True, False))
+        self.assertNotIn(6, p.get_allowed_panels_for_position(5, True, True))
+        self.assertIn(3, p.get_allowed_panels_for_position(5, False, False))
+        self.assertNotIn(3, p.get_allowed_panels_for_position(5, False, True))
+        self.assertIn(5, p.get_allowed_panels_for_position(2, True, False))
+        self.assertNotIn(5, p.get_allowed_panels_for_position(2, True, True))
 
     def test_single_steps_avoid_center_panel_leaps_at_transitions(self):
         toward_p1 = ((7, 4, 7), False, 5)

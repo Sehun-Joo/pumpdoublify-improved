@@ -113,6 +113,33 @@ def is_safe_stance(left_panel, right_panel):
         return True
     return (left_panel, right_panel) in allowed_lr_pairs
 
+def stance_keeps_both_feet_mobile(left_panel, right_panel):
+    """Reject a stance that traps either foot on its current panel."""
+    if left_panel is None or right_panel is None:
+        return True
+
+    for moving_left, current_panel, other_panel in (
+        (True, left_panel, right_panel),
+        (False, right_panel, left_panel),
+    ):
+        has_exit = False
+        for next_panel in range(10):
+            if next_panel == current_panel:
+                continue
+            if not is_safe_foot_movement(current_panel, next_panel):
+                continue
+            stance = (
+                (next_panel, other_panel)
+                if moving_left
+                else (other_panel, next_panel)
+            )
+            if is_safe_stance(*stance):
+                has_exit = True
+                break
+        if not has_exit:
+            return False
+    return True
+
 def get_step_feet(step_pattern, final_left_foot):
     """Reconstruct the foot attached to every generated output step."""
     toggle_count = 0
@@ -180,15 +207,37 @@ CENTER_PANELS_BY_FOOT = {
 TRANSITION_PREP_PANELS_BY_POSITION_AND_FOOT = {
     # position_index 2 moves from center toward P2 next.
     2: {
-        True: {3, 4, 5, 6, 7},
-        False: {3, 4, 5, 6, 7},
+        True: {3, 4},
+        False: {5, 6, 7},
     },
     # position_index 5 moves from center toward P1 next.
     5: {
-        True: {2, 3, 4, 5, 6},
-        False: {2, 3, 4, 5, 6},
+        True: {2, 3, 4},
+        False: {5, 6},
     },
 }
+
+def get_allowed_panels_for_position(
+    position_index,
+    is_left_foot,
+    is_transition_pending=False,
+):
+    """Return the target region for one foot in the current position."""
+    position = positions[position_index]
+    distances = left_foot_distances if is_left_foot else right_foot_distances
+    allowed_panels = {
+        panel for panel, distance in enumerate(distances[position])
+        if distance < 1
+    }
+    if (
+        position in CENTER_POSITIONS
+        and is_transition_pending
+        and position_index in TRANSITION_PREP_PANELS_BY_POSITION_AND_FOOT
+    ):
+        allowed_panels &= TRANSITION_PREP_PANELS_BY_POSITION_AND_FOOT[
+            position_index
+        ][is_left_foot]
+    return allowed_panels
 
 CENTER_JUMPS = [
     (left_panel, right_panel)
@@ -233,16 +282,13 @@ def rate_step(
 ):
     # Check position
     position = positions[position_index]
-    if position in CENTER_POSITIONS:
-        allowed_panels = CENTER_PANELS_BY_FOOT[is_left_foot]
-        if (
-            is_transition_pending
-            and position_index in TRANSITION_PREP_PANELS_BY_POSITION_AND_FOOT
-        ):
-            prep = TRANSITION_PREP_PANELS_BY_POSITION_AND_FOOT[position_index]
-            allowed_panels = prep[is_left_foot]
-        if notes[-1] not in allowed_panels:
-            return NEVER
+    allowed_panels = get_allowed_panels_for_position(
+        position_index,
+        is_left_foot,
+        is_transition_pending,
+    )
+    if notes[-1] not in allowed_panels:
+        return NEVER
 
     if is_left_foot:
         dist = left_foot_distances[position][notes[-1]]
@@ -495,6 +541,18 @@ def can_apply_position_transition(
 BEAM_SIZE = 50
 MIN_HOLD_BEATS = 0.25
 HOLD_TRANSITION_BUFFER_BEATS = 0.25
+MIN_POSITION_MEASURES = 4
+
+def position_transition_is_due(
+    pending_transition_measure,
+    current_measure,
+    last_transition_measure,
+):
+    return (
+        pending_transition_measure is not None
+        and current_measure >= pending_transition_measure
+        and current_measure - last_transition_measure >= MIN_POSITION_MEASURES
+    )
 
 def doublify_measures(measures, bpm_changes):
     double_stream = []
@@ -524,6 +582,8 @@ def doublify_measures(measures, bpm_changes):
     position_rate = 0 # 0 - 1, how fast the position changes.
     position_progress = 0 # 0 - 1, progress until next transition.
     pending_transition_measure = None
+    last_transition_measure = 0
+    output_position_contexts = []
     # Always start in middle
     position_index = random.choice([1,4])
     was_jump = False
@@ -543,14 +603,16 @@ def doublify_measures(measures, bpm_changes):
             was_jump,
         ):
             current_measure = int(note_beat // 4)
-            if (
-                pending_transition_measure is not None
-                and current_measure >= pending_transition_measure
+            if position_transition_is_due(
+                pending_transition_measure,
+                current_measure,
+                last_transition_measure,
             ):
                 position_index = (position_index + 1) % len(positions)
                 position_progress = 0
                 position_rate = random.random()
                 pending_transition_measure = None
+                last_transition_measure = current_measure
                 log.debug(
                     'Position transition at beat %.3f (measure %d, position %d)',
                     note_beat,
@@ -563,6 +625,11 @@ def doublify_measures(measures, bpm_changes):
         position_progress += 1 / pos_steps
         if position_progress >= 1 and pending_transition_measure is None:
             pending_transition_measure = next_measure_index(note_beat)
+
+        output_count = 2 if note_kind in (JUMP, JUMP_JACK) else 1
+        output_position_contexts.extend([
+            (position_index, pending_transition_measure is not None)
+        ] * output_count)
 
         new_state_pairs = []
         for old_state_key, old_state_value in states.items():
@@ -730,6 +797,7 @@ def doublify_measures(measures, bpm_changes):
     double_step_kinds = get_output_step_kinds(step_pattern)
     assert len(double_feet) == len(double_steps)
     assert len(double_step_kinds) == len(double_steps)
+    assert len(output_position_contexts) == len(double_steps)
     
     double_step_index = 0
     invert_generated_feet = False
@@ -790,10 +858,21 @@ def doublify_measures(measures, bpm_changes):
         del source_hold_start_beats[source_lane]
         cancelled_source_holds.add(source_lane)
 
-    def choose_safe_panel(generated_panel, foot, step_kind):
+    def choose_safe_panel(
+        generated_panel,
+        foot,
+        step_kind,
+        position_context,
+    ):
         """Preserve source intent while keeping every foot route playable."""
         previous_panel = last_panel_by_foot.get(foot)
         other_panel = last_panel_by_foot.get(not foot)
+        position_index, is_transition_pending = position_context
+        target_panels = get_allowed_panels_for_position(
+            position_index,
+            foot,
+            is_transition_pending,
+        )
 
         def panel_is_safe(panel):
             if panel is None:
@@ -808,7 +887,11 @@ def doublify_measures(measures, bpm_changes):
             if step_kind == SLIDE and panel == previous_panel:
                 return False
             stance = (panel, other_panel) if foot else (other_panel, panel)
-            return is_safe_stance(*stance)
+            if not is_safe_stance(*stance):
+                return False
+            if step_kind == SLIDE and not stance_keeps_both_feet_mobile(*stance):
+                return False
+            return True
 
         # STEP is a source return (the same source lane as two events ago).
         # Keep that foot anchored for as long as the source pattern does,
@@ -823,11 +906,20 @@ def doublify_measures(measures, bpm_changes):
         for panel in range(10):
             if not panel_is_safe(panel):
                 continue
-            score = panel_distance(panel, generated_panel)
-            if previous_panel is not None:
-                score += panel_distance(previous_panel, panel)
-                if step_kind == STEP and panel == previous_panel:
-                    score -= 2
+            outside_target = (
+                step_kind not in (JACK, STEP)
+                and panel not in target_panels
+            )
+            movement_distance = (
+                panel_distance(previous_panel, panel)
+                if previous_panel is not None
+                else 0
+            )
+            score = (
+                outside_target,
+                panel_distance(panel, generated_panel),
+                movement_distance,
+            )
             candidates.append((score, panel))
 
         if not candidates:
@@ -918,6 +1010,9 @@ def doublify_measures(measures, bpm_changes):
                     double_feet[double_step_index] != invert_generated_feet
                 )
                 generated_step_kind = double_step_kinds[double_step_index]
+                generated_position_context = output_position_contexts[
+                    double_step_index
+                ]
                 double_step_index += 1
                 if reused_output_panels:
                     output_panel, foot = reused_output_panels.pop(0)
@@ -932,9 +1027,15 @@ def doublify_measures(measures, bpm_changes):
                         generated_output_panel,
                         foot,
                         generated_step_kind,
+                        generated_position_context,
                     )
-                    if safe_panel is not None:
-                        output_panel = safe_panel
+                    if safe_panel is None:
+                        log.warning(
+                            'Safe output routing exhausted at beat %.3f; retrying',
+                            current_beat,
+                        )
+                        return None
+                    output_panel = safe_panel
 
                 # If hold ownership forced this note onto the opposite foot,
                 # carry that parity change into subsequent generated steps.
