@@ -76,6 +76,53 @@ allowed_foot_movements = set([
     (9,7), (9,8), (9,9),
 ])
 
+# Never let one foot cut diagonally across the gap between pads. These are the
+# two X-shaped movements through the center of a doubles setup:
+# P1 upper-right <-> P2 lower-left and P1 lower-right <-> P2 upper-left.
+FORBIDDEN_CENTER_DIAGONALS = {
+    (3, 5), (5, 3),
+    (4, 6), (6, 4),
+}
+
+def is_safe_foot_movement(previous_panel, next_panel):
+    movement = (next_panel, previous_panel)
+    return (
+        movement in allowed_foot_movements
+        and movement not in FORBIDDEN_CENTER_DIAGONALS
+    )
+
+PANEL_COORDINATES = [
+    (0, 0), (0, 2), (1, 1), (2, 2), (2, 0),
+    (3, 0), (3, 2), (4, 1), (5, 2), (5, 0),
+]
+
+def panel_distance(a, b):
+    ax, ay = PANEL_COORDINATES[a]
+    bx, by = PANEL_COORDINATES[b]
+    return abs(ax - bx) + abs(ay - by)
+
+def get_step_feet(step_pattern, final_left_foot):
+    """Reconstruct the foot attached to every generated output step."""
+    toggle_count = 0
+    for note_kind, _, _ in step_pattern:
+        if note_kind in (STEP, SLIDE):
+            toggle_count += 1
+
+    initial_left_foot = (
+        final_left_foot if toggle_count % 2 == 0 else not final_left_foot
+    )
+    last_left_foot = initial_left_foot
+    feet = []
+    for note_kind, _, _ in step_pattern:
+        if note_kind == JACK:
+            feet.append(last_left_foot)
+        elif note_kind in (JUMP, JUMP_JACK):
+            feet.extend((not last_left_foot, last_left_foot))
+        else:
+            last_left_foot = not last_left_foot
+            feet.append(last_left_foot)
+    return feet
+
 #positions: left half, middle 6 x2, right half
 #originally tested two different middle positions, but ended up leaving them identical
 left_foot_distances = [
@@ -94,10 +141,32 @@ right_foot_distances = [
 
 positions = [0,1,2,3,2,1]
 
+# In either of the two middle positions, keep each foot on its own half of the
+# center six panels.  These are hard constraints; the distance tables below
+# are still used to score the remaining legal choices.
+CENTER_POSITIONS = {1, 2}
+CENTER_LEFT_FOOT_PANELS = {2, 3, 4}
+CENTER_RIGHT_FOOT_PANELS = {5, 6, 7}
+
+# The middle position next to P1 (position 1) keeps the right foot off P2
+# center.  The middle position next to P2 (position 2) mirrors that rule for
+# the left foot.  This turns the two middle positions into transition zones
+# instead of allowing a center-panel-to-opposite-pad leap at the boundary.
+CENTER_PANELS_BY_POSITION_AND_FOOT = {
+    1: {
+        True: {2, 3, 4},
+        False: {5, 6},
+    },
+    2: {
+        True: {3, 4},
+        False: {5, 6, 7},
+    },
+}
+
 jumps_for_position = [
     [(0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (1, 4), (2, 3), (2, 4)],
-    [(2, 3), (2, 4), (2, 5), (2, 6), (3, 4), (3, 5), (3, 6), (3, 7), (4, 3), (4, 5), (4, 6), (4, 7), (5, 6), (5, 7), (6, 5), (6, 7)],
-    [(2, 3), (2, 4), (2, 5), (2, 6), (3, 4), (3, 5), (3, 6), (3, 7), (4, 3), (4, 5), (4, 6), (4, 7), (5, 6), (5, 7), (6, 5), (6, 7)],
+    [(2, 5), (2, 6), (3, 5), (3, 6), (4, 5), (4, 6)],
+    [(3, 5), (3, 6), (3, 7), (4, 5), (4, 6), (4, 7)],
     [(5, 7), (5, 8), (5, 9), (6, 7), (6, 8), (6, 9), (7, 8), (7, 9)],
 ]
 
@@ -110,6 +179,11 @@ FORWARDNESS = [0, 2, 1, 2, 0, 0, 2, 1, 2, 0] #How far up each panel is
 def rate_step(notes, is_left_foot, position_index, is_single_step, og_note):
     # Check position
     position = positions[position_index]
+    if position in CENTER_POSITIONS:
+        allowed_panels = CENTER_PANELS_BY_POSITION_AND_FOOT[position][is_left_foot]
+        if notes[-1] not in allowed_panels:
+            return NEVER
+
     if is_left_foot:
         dist = left_foot_distances[position][notes[-1]]
     else:
@@ -140,6 +214,8 @@ def rate_step(notes, is_left_foot, position_index, is_single_step, og_note):
     if len(notes) >= 3:
         a = notes[-1]
         b = notes[-3]
+        if (a, b) in FORBIDDEN_CENTER_DIAGONALS:
+            return NEVER
         if not (a, b) in allowed_foot_movements:
             return NEVER
 
@@ -330,7 +406,14 @@ def transition_step_bounds(bpm):
 
     return (hi_min, hi_max)
 
+def next_measure_index(beat):
+    """Return the measure on which a newly due transition may begin."""
+    return int(beat // 4) + 1
+
 BEAM_SIZE = 50
+MIN_HOLD_BEATS = 0.25
+HOLD_TRANSITION_BUFFER_BEATS = 0.25
+
 def doublify_measures(measures, bpm_changes):
     double_stream = []
 
@@ -358,22 +441,36 @@ def doublify_measures(measures, bpm_changes):
 
     position_rate = 0 # 0 - 1, how fast the position changes.
     position_progress = 0 # 0 - 1, progress until next transition.
+    pending_transition_measure = None
     # Always start in middle
     position_index = random.choice([1,4])
     was_jump = False
 
     for note_index in range(len(step_pattern)):
-        note_kind, og_note, _ = step_pattern[note_index]
+        note_kind, og_note, note_beat = step_pattern[note_index]
         bpm = bpms[note_index]
         if note_kind in [STEP, SLIDE] and not was_jump:
-            if position_progress >= 1: 
+            current_measure = int(note_beat // 4)
+            if (
+                pending_transition_measure is not None
+                and current_measure >= pending_transition_measure
+            ):
                 position_index = (position_index + 1) % len(positions)
                 position_progress = 0
                 position_rate = random.random()
+                pending_transition_measure = None
+                log.debug(
+                    'Position transition at beat %.3f (measure %d, position %d)',
+                    note_beat,
+                    current_measure,
+                    positions[position_index],
+                )
 
         pos_steps_lo, pos_steps_hi = transition_step_bounds(bpm)
         pos_steps = pos_steps_lo + position_rate*(pos_steps_hi - pos_steps_lo)
         position_progress += 1 / pos_steps
+        if position_progress >= 1 and pending_transition_measure is None:
+            pending_transition_measure = next_measure_index(note_beat)
 
         new_state_pairs = []
         for old_state_key, old_state_value in states.items():
@@ -389,11 +486,23 @@ def doublify_measures(measures, bpm_changes):
                 old1 = old_full_steps[0]
                 old0 = old_full_steps[1][0]
 
+                if old_left_foot:
+                    old_left_panel, old_right_panel = old1, old0
+                else:
+                    old_left_panel, old_right_panel = old0, old1
+
                 candidates = [
                     j for j in jumps_for_position[positions[position_index]]
                     if min(*j) != min(old0, old1) or max(*j) != max(old0, old1)
+                    if is_safe_foot_movement(old_left_panel, j[0])
+                    and is_safe_foot_movement(old_right_panel, j[1])
                 ]
-                note0, note1 = random.choice(candidates)
+                if candidates:
+                    note0, note1 = random.choice(candidates)
+                else:
+                    # Repeating a stance is preferable to forcing either foot
+                    # through an illegal transition when no new jump is safe.
+                    note0, note1 = old_left_panel, old_right_panel
                 if old_left_foot:
                     note0, note1 = note1, note0
 
@@ -411,20 +520,27 @@ def doublify_measures(measures, bpm_changes):
                         note1 = random.choice([5,6])
                 else:
                     note1 = old_full_steps[0]
+                    previous_other_panel = old_full_steps[1][0]
                     
                     if old_left_foot:
                         candidates = [
                             b for a, b in jumps_for_position[positions[position_index]]
                             if a == note1
+                            and is_safe_foot_movement(previous_other_panel, b)
                         ]
                     else:
                         candidates = [
                             a for a, b in jumps_for_position[positions[position_index]]
                             if b == note1
+                            and is_safe_foot_movement(previous_other_panel, a)
                         ]
 
                     if candidates:
                         note0 = random.choice(candidates)
+                    else:
+                        # Keep the other foot planted if that existing stance
+                        # is the only safe way to express the jump.
+                        note0 = previous_other_panel
 
                 new_state_pairs.append((
                     ((note0, note1), old_left_foot),
@@ -487,74 +603,240 @@ def doublify_measures(measures, bpm_changes):
 
             states[key] = value
 
+        if len(states) == 0:
+            log.warning(
+                'Pattern search exhausted at event %d/%d (beat %.3f, position %d)',
+                note_index + 1,
+                len(step_pattern),
+                step_pattern[note_index][2],
+                positions[position_index],
+            )
+            return None
+
     if len(states) == 0:
         return None
 
 
-    best_value = max(states.values(), key=lambda value: value[0])
+    best_key, best_value = max(states.items(), key=lambda item: item[1][0])
     score, full_steps = best_value
     double_steps = []
     while full_steps is not None:
         double_steps.append(full_steps[0])
         full_steps = full_steps[1]
     double_steps = double_steps[::-1]
+    double_feet = get_step_feet(step_pattern, best_key[1])
+    assert len(double_feet) == len(double_steps)
     
     double_step_index = 0
-    held_notes = set()
-    cancelled_hold_count = 0
+    # Holds must retain their input-lane identity.  The old implementation
+    # stored only a set of output panels, so a release could end a different
+    # hold from the one that began on that input lane.
+    source_holds = {}
+    source_hold_feet = {}
+    source_hold_start_indices = {}
+    source_hold_start_beats = {}
+    cancelled_source_holds = set()
+    last_panel_by_foot = {}
     double_notes = []
-    for measure in measures:
-        for notes in measure:
+    double_note_beats = []
+
+    def convert_hold_start_to_tap(output_panel, start_index):
+        row = double_notes[start_index]
+        if row[output_panel] in b'24':
+            double_notes[start_index] = (
+                row[:output_panel] + b'1' + row[output_panel + 1:]
+            )
+
+    def place_early_release(output_panel, start_index, current_beat):
+        """Trim a hold with a playable gap, or turn it into a tap."""
+        start_beat = double_note_beats[start_index]
+        latest_release_beat = current_beat - HOLD_TRANSITION_BUFFER_BEATS
+        if latest_release_beat - start_beat < MIN_HOLD_BEATS:
+            convert_hold_start_to_tap(output_panel, start_index)
+            return
+
+        for row_index in range(len(double_notes) - 1, start_index, -1):
+            if double_note_beats[row_index] > latest_release_beat:
+                continue
+            row = double_notes[row_index]
+            if row[output_panel] == ord('0'):
+                double_notes[row_index] = (
+                    row[:output_panel] + b'3' + row[output_panel + 1:]
+                )
+                return
+
+        convert_hold_start_to_tap(output_panel, start_index)
+
+    def cancel_output_hold(output_panel):
+        """End a conflicting hold before output_panel is stepped again."""
+        source_lane = next(
+            (lane for lane, panel in source_holds.items()
+             if panel == output_panel),
+            None,
+        )
+        if source_lane is None:
+            return
+
+        start_index = source_hold_start_indices[source_lane]
+        place_early_release(output_panel, start_index, current_beat)
+        del source_holds[source_lane]
+        del source_hold_feet[source_lane]
+        del source_hold_start_indices[source_lane]
+        del source_hold_start_beats[source_lane]
+        cancelled_source_holds.add(source_lane)
+
+    def choose_panel_for_free_foot(generated_panel, foot):
+        """Keep a note on the unheld foot and in a playable stance."""
+        previous_panel = last_panel_by_foot.get(foot)
+        held = [
+            (source_holds[lane], source_hold_feet[lane])
+            for lane in source_holds
+        ]
+        candidates = []
+        for panel in range(10):
+            if chars[panel] != b'0' or panel in source_holds.values():
+                continue
+            if previous_panel is not None and not is_safe_foot_movement(previous_panel, panel):
+                continue
+            if held:
+                held_panel, held_foot = held[0]
+                if held_foot == foot:
+                    continue
+                stance = (panel, held_panel) if foot else (held_panel, panel)
+                if stance not in allowed_lr_pairs:
+                    continue
+            score = panel_distance(panel, generated_panel)
+            if previous_panel is not None:
+                score += panel_distance(previous_panel, panel)
+            candidates.append((score, panel))
+
+        if not candidates:
+            return None
+        best_score = min(score for score, _ in candidates)
+        return random.choice([
+            panel for score, panel in candidates if score == best_score
+        ])
+
+    for measure_index, measure in enumerate(measures):
+        for notes_index, notes in enumerate(measure):
+            current_beat = 4*measure_index + 4*notes_index/len(measure)
             chars = [b'0']*10
-            new_held_notes = set()
-            
-            tap_count = sum(n in b'1' for n in notes)
-            hold_count = sum(n in b'2' for n in notes)
-            roll_count = sum(n in b'4' for n in notes)
+            released_hold_start_indices = {}
 
-            while tap_count + roll_count + hold_count > 2:
-                if tap_count > 0:
-                    tap_count -= 1
-                elif hold_count > 0:
-                    hold_count -= 1
-                    cancelled_hold_count += 1
+            # Preserve the converter's existing preference when a source row
+            # has more than two starts: taps are discarded first, followed by
+            # holds, then rolls.  Unlike the old count-based code, retain the
+            # input lane for every accepted hold.
+            starts = [
+                (source_lane, bytes([kind]))
+                for source_lane, kind in enumerate(notes)
+                if kind in b'124'
+            ]
+            while len(starts) > 2:
+                discard_index = next(
+                    (i for i, (_, kind) in enumerate(starts) if kind == b'1'),
+                    None,
+                )
+                if discard_index is None:
+                    discard_index = next(
+                        (i for i, (_, kind) in enumerate(starts) if kind == b'2'),
+                        None,
+                    )
+                if discard_index is None:
+                    discard_index = 0
+                source_lane, kind = starts.pop(discard_index)
+                if kind in b'24':
+                    cancelled_source_holds.add(source_lane)
+
+            # Releases happen before starts on a row. This also handles a hold
+            # ending while another begins without assigning the release to an
+            # unrelated panel.
+            for source_lane, kind in enumerate(notes):
+                if kind != ord('3'):
+                    continue
+                if source_lane in cancelled_source_holds:
+                    cancelled_source_holds.remove(source_lane)
+                elif source_lane in source_holds:
+                    output_panel = source_holds.pop(source_lane)
+                    source_hold_feet.pop(source_lane)
+                    start_index = source_hold_start_indices.pop(source_lane)
+                    start_beat = source_hold_start_beats.pop(source_lane)
+                    if current_beat - start_beat < MIN_HOLD_BEATS:
+                        convert_hold_start_to_tap(output_panel, start_index)
+                    else:
+                        chars[output_panel] = b'3'
+                        released_hold_start_indices[output_panel] = start_index
                 else:
-                    roll_count -= 1
-                    cancelled_hold_count += 1
+                    log.warning(
+                        'Hold release on source lane %d has no matching start',
+                        source_lane,
+                    )
 
-            for kind, count in zip(b'124', [tap_count, hold_count, roll_count]):
-                for _ in range(count):
-                    n = double_steps[double_step_index]
-                    double_step_index += 1
-                    chars[n] = bytes([kind])
+            # A two-foot chart cannot sustain more than two holds/steps at
+            # once. Source charts sometimes overlap one pair of short holds
+            # with the next pair; end the oldest output holds immediately
+            # before the new row rather than producing a four-panel hold.
+            reused_output_panels = []
+            if len(source_holds) == 2 and len(starts) == 2:
+                # Preserve the existing stance for a pair-to-pair handoff.
+                # Choosing two newly generated panels here can demand a full
+                # two-foot reposition in a single 192nd-note subdivision.
+                reused_output_panels = [
+                    (source_holds[lane], source_hold_feet[lane])
+                    for lane in source_holds
+                ]
+                for output_panel, _ in reused_output_panels:
+                    cancel_output_hold(output_panel)
 
-                    if n in held_notes:
-                        # Cancel the hold.
-                        if double_notes[-1][n] in b'24':
-                            cancel_note = b'1'
-                        else:
-                            cancel_note = b'3'
-                        double_notes[-1] = double_notes[-1][:n] + cancel_note + double_notes[-1][n+1:]
-                        held_notes.remove(n)
-                        cancelled_hold_count += 1
+            while len(source_holds) + len(starts) > 2:
+                oldest_source_lane = next(iter(source_holds))
+                cancel_output_hold(source_holds[oldest_source_lane])
 
-                    if kind in b'24':
-                        new_held_notes.add(n)
-
-            release_count = sum(n in b'3' for n in notes)
-            for _ in range(release_count):
-                if cancelled_hold_count > 0:
-                    cancelled_hold_count -= 1
-                elif len(held_notes) > 0:
-                    n = next(iter(held_notes))
-                    chars[n] = b'3'
-                    held_notes.remove(n)
+            for source_lane, kind in starts:
+                generated_output_panel = double_steps[double_step_index]
+                generated_foot = double_feet[double_step_index]
+                double_step_index += 1
+                if reused_output_panels:
+                    output_panel, foot = reused_output_panels.pop(0)
                 else:
-                    log.warning(f'Something\'s fucky with the holds?')
+                    output_panel = generated_output_panel
+                    foot = generated_foot
 
-            held_notes |= new_held_notes
+                    held_feet = set(source_hold_feet.values())
+                    if foot in held_feet and len(held_feet) == 1:
+                        foot = not foot
+                    if source_holds:
+                        free_foot_panel = choose_panel_for_free_foot(
+                            generated_output_panel,
+                            foot,
+                        )
+                        if free_foot_panel is not None:
+                            output_panel = free_foot_panel
+
+                if output_panel in source_holds.values():
+                    cancel_output_hold(output_panel)
+
+                # A release and a new start cannot share an output column on
+                # one row. If generation selected that column, end the old hold
+                # on the prior row and use this row for the new note.
+                if chars[output_panel] == b'3':
+                    place_early_release(
+                        output_panel,
+                        released_hold_start_indices[output_panel],
+                        current_beat,
+                    )
+                    chars[output_panel] = b'0'
+
+                chars[output_panel] = kind
+                last_panel_by_foot[foot] = output_panel
+                if kind in b'24':
+                    source_holds[source_lane] = output_panel
+                    source_hold_feet[source_lane] = foot
+                    source_hold_start_indices[source_lane] = len(double_notes)
+                    source_hold_start_beats[source_lane] = current_beat
 
             double_notes.append(b''.join(chars))
+            double_note_beats.append(current_beat)
 
     assert double_step_index == len(double_steps)
 

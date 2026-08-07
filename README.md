@@ -7,10 +7,20 @@ Huge thanks to Boxx for writing the original 4 panel -> 8 panel converter, this 
 - Removes old autogen charts so you can re-doublify charts when a new version comes out.
 - Skips charts which have non-autogen double charts so you can doublify your whole Songs folder and you won't lose anything.
 - Generates patterns suitable for stamina & footspeed.
+- Uses staged middle positions so transitions never require a foot to leap
+  from one pad's center panel directly toward the opposite pad.
+- Forbids diagonal movements across the gap between the two pads.
+- Limits overlapping holds and new steps to two active feet, ending older
+  holds cleanly before a new pair begins.
+- Keeps notes played during a hold on the free foot instead of alternating
+  back onto the held foot.
+- Delays already-due pad transitions to the next measure boundary when an
+  eligible step is available; this does not add extra transitions.
 
 ## Issues
 - Quads & triples will be converted to jumps.
-- Holds & rolls are included but don't affect pattern generation, so this can lead to double steps.
+- Holds and rolls keep their source-lane identity, resolve on the panel where
+  they started, and are ended cleanly if a generated step must reuse the panel.
 - Footswitches will be converted to jacks.
 - Does not distinguish between jumps & 1-foot brackets. All will be converted to jumps.
 - An all-jump section will not move across the pads.
